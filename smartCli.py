@@ -1,6 +1,8 @@
 import ollama
 import subprocess
 import sys
+import re
+
 
 if __name__ == "__main__":
 
@@ -10,7 +12,7 @@ if __name__ == "__main__":
 
     if len(sys.argv) != 2:
         print("Excepted input\n<script> <command>")
-        exit(1)
+        sys.exit(1)
 
     # know the command user wants to send to local llm now.. can use the ollama library to chat will bash-llama
     command = sys.argv[1]
@@ -21,35 +23,48 @@ if __name__ == "__main__":
     )
 
     raw_text = response['message']['content']
-    parts = raw_text.split("```")
-    
+
     '''
     not the most robust but now should have a response of:
-    ```
+    ```bash
     <bash script>
     ```
-    so parts[1] should be the raw text of the bash script generated
-    should output the generated script to the user before using subprocess to run it
-    '''
+    ''' 
+    # extracting script with a regex: ```(?:bash)?\s*(.*?)```, not sure if 'bash' ]
+    # will always be output why I made it an optional argument
+  
+    # DOTALL allows for multiline, ignorecase is used to treat upper/lower as identical
+    extracted = re.search(r'```(?:bash)?\s*(.*?)```', raw_text, re.DOTALL | re.IGNORECASE)
 
-    print("Bash script generated:")
-    script_content = parts[1]
+    if extracted:
+      # getting actual script content and remove extra whitespace
+      script_content = extracted.group(1).strip()
+      
+    else: 
+      # if the llm doesnt put scope blocks in,, this is a fallback
+      script_content = raw_text.strip()
+    
+    print("Generated Bash Script:\n")
     print(script_content)
-    run = input("Run this script [y/n]: ")
+
+    run = input("\nRun this script [y/n]: ").strip().lower() # allows for caps/whitespace
 
     # i like to have it so response could be y/yes/yurp/etc..
     while True:
-
-        if run[0].lower() == 'n':
+        if not run:
+          run = input("Pleas enter y/n: ").strip().lower()
+          continue
+        
+        if run[0] == 'n':
             print("maybe here would be a good place to keep memory of chat and edit output")
-            exit(1)
+            sys.exit(1)
     
-        elif run[0].lower() == 'y':
+        elif run[0] == 'y':
         # can excute script now 
             break
         
         else:
-            print("unexpected input... enter y/n")
+            run = input("unexpected input... enter y/n").strip().lower()
 
 
     # now should excecute the script.. maybe have an option to save the script in a file and give a path/name?
