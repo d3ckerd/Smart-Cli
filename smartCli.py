@@ -2,14 +2,17 @@ import ollama
 import subprocess
 import sys
 import re
+from pathlib import Path
 
-# global var for message history 
+# TODO: add the ability to watch the live output of script if it is timed... also the option to save a script as a .sh
+
+# global var for message history
 messages = []
 
 def generate_script(command):
   messages.append({'role': 'user', 'content': command})
   response = ollama.chat(model = "bash-llama", messages = messages)
-  
+
   # also appending models reply to the history as 'assistant'
   raw_text = response['message']['content']
   messages.append({"role": "assistant", "content": raw_text})
@@ -19,34 +22,28 @@ def generate_script(command):
     ```bash
     <bash script>
     ```
-    ''' 
+    '''
   # extracting script with a regex: ```(?:bash)?\s*(.*?)```, not sure if 'bash' ]
   # will always be output why I made it an optional argument
-  
+
   # DOTALL allows for multiline, ignorecase is used to treat upper/lower as identical
   extracted = re.search(r'```(?:bash)?\s*(.*?)```', raw_text, re.DOTALL | re.IGNORECASE)
 
   if extracted:
     # getting actual script content and remove extra whitespace
     script_content = extracted.group(1).strip()
-      
-  else: 
+
+  else:
     # if the llm doesnt put scope blocks in,, this is a fallback
     script_content = raw_text.strip()
-    
+
   return script_content
 
 if __name__ == "__main__":
 
-    # using sys to grab arguments from user
-    # sys.argv[0] = script name
-    # sys.argv[1] = first arg after (will have to wrap in "" for ease)
+    # realized it is easier just to grab user input from python 'input' rather than argv
 
-    if len(sys.argv) != 2:
-        print("Excepted input\n<script> <command>")
-        sys.exit(1)
-
-    inital_prompt = sys.argv[1]
+    inital_prompt = input("Enter inital prompt: ")
     script = generate_script(inital_prompt)
     print("Generated Bash Script:\n")
     print(script)
@@ -57,47 +54,54 @@ if __name__ == "__main__":
         if not run:
           run = input("\nRun this script [y/n]: ").strip().lower()
           continue
-        
+
         if run[0] == 'n':
           edit = input("Edit the prompt [y/n]: ")
           if edit[0].strip().lower() == 'n':
             sys.exit(1)
-          
+
           else:
             additional_prompt = input("\nEnter prompt: ")
             script = generate_script(additional_prompt)
             print("\nGenerated Bash Script:\n")
             print(script)
             run = "" # wondering if this will give the 'not run' could be cheeky way around]
-    
+
         elif run[0] == 'y':
-        # can excute script now 
+        # can excute script now
             break
-        
+
         else:
-            run = input("unexpected input... enter y/n").strip().lower()
+            run = input("unexpected input... enter [y/n]: ").strip().lower()
 
-
-    # now should excecute the script.. maybe have an option to save the script in a file and give a path/name?
-    try:
-        result = subprocess.run(
+    try:    
+        # changed to Popen over run so could get live streaming using PIPE
+        result = subprocess.Popen(
             script,
             shell = True,
             executable = '/bin/bash',  # forcing bash
             text = True,               # output as a string
-            capture_output = True,     # captures stdout/stderr
-            check = True               # throws excpetion if bash script fails
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
         )
 
-        # some scripts won't have output
-        if result.stdout:
-          print("\nOutput of executed script:")
-          print(result.stdout)
-        
-    
+        for line in result.stdout:
+            print(f"Live Output: {line.strip()}")
+
+        result.wait()
+
+        # checking for bash errors
+        if result.returncode != 0:
+            print("\nThe bash script failed to execute")
+            print(f"Error:\n {result.stderr.read()}")
+        else:
+            print("\nScript executed successfully")
+
     except Exception as e:
         print("The bash script failed to excecute")
         print(f"Error output: {e.stderr}")
+
+    # option to save the script in a directory (just default to the home directory?)
 
 
 '''
