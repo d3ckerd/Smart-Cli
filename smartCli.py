@@ -4,17 +4,98 @@ import sys
 import re
 import os
 import stat
+import typer
+import shutil
+from pathlib import Path
+# textaul for input text boxes
+from textual.app import App, ComposeResult
+from textual.widgets import Input
+# rich for cli output
 from rich.syntax import Syntax
 from rich.console import Console
-from pathlib import Path
+from rich.panel import Panel
+from rich.rule import Rule
 
-# TODO: research libs like click or typer to make the cli interface more professional/clean, clean up sections in cli as well so flow feels better
+# defining UI component using textual lib (was using prompt_toolkit but chose this instead)
+class BoxPrompt(App[str]):
+    # css for text box
+    CSS = """
+    Input {
+        border: solid white;
+        width: 100%;
+        background: transparent;
+    }
+    """
+
+    def __init__(self, placeholder_text: str):
+        super().__init__()
+        self.placeholder_text = placeholder_text
+    
+    def compose(self) -> ComposeResult:
+        # input field with grey placeholder text
+        yield Input(placeholder=self.placeholder_text)
+    
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # when enter hit, eixt app and return string
+        
+        self.exit(event.value)
+
+
+# Decision box ui
+class DecisionPrompt(App[bool]):
+    # Uses the exact same CSS as above
+    CSS = """
+    Input {
+        border: solid white;
+        width: 100%;
+        background: transparent;
+    }
+    """
+    
+    def __init__(self, question: str):
+        super().__init__()
+        self.question = question
+
+    def compose(self) -> ComposeResult:
+        # Append the standard [y/N] indicator to question
+        yield Input(placeholder=f"{self.question} [y/N]")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        val = event.value.strip().lower()
+        
+        if val in ['y', 'yes']:
+            self.exit(True)
+        elif val in ['n', 'no', '']: # Hitting Enter with no text defaults to False
+            self.exit(False)
+        else:
+            # If they type something invalid, clear the box and ask again
+            event.input.placeholder = f"Invalid input. Please type 'y' or 'n'. {self.question} [y/N]"
 
 # global var for message history
 messages = []
 
 # rich console for formatted printing of scripts
 console = Console()
+
+# typer app for cli 
+app = typer.Typer()
+
+
+def get_input(text = "Enter prompt"):
+    app = BoxPrompt(text)
+
+    # prevent ui from overriding whole screen
+    user_input = app.run(inline = True)
+
+    return user_input.strip() if user_input else ""
+
+
+def get_decision(question):
+    app = DecisionPrompt(question)
+    # yes/no confirmation box
+    # true if select yes, false otherwise
+    decision = app.run(inline = True)
+    return decision
 
 def generate_script(command):
     messages.append({'role': 'user', 'content': command})
@@ -47,17 +128,22 @@ def generate_script(command):
     return script_content
 
 
-def save_script(script_name):
-    exec_dir = Path("~/.local/bin")
+def save_script(script_name, script_content):
+    exec_dir = Path("~/.local/bin").expanduser()
     script_path = exec_dir / (script_name + ".sh")       
     # making sure directory already exists, if not makes it
     exec_dir.mkdir(parents = True, exist_ok = True)
 
     # mode 'w' sets write mode
     with open(script_path, mode = "w", encoding = "utf-8") as file:
-        for line in script:
-            file.write(line)    
-    print("file saved!")
+        file.write(script_content)   
+    
+    success_panel = Panel(
+        f"[bold green]File saved successfully to {script_path}[/bold green]",
+        border_style="green",
+        expand=False
+    )
+    console.print(success_panel)
 
     # making file executbale (same as 'chmod +x filename.sh')
     # gets files permssions
@@ -66,49 +152,65 @@ def save_script(script_name):
     executable = current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
     os.chmod(script_path, executable)
 
-if __name__ == "__main__":
 
-    # realized it is easier just to grab user input from python 'input' rather than argv
+# adding in typer to the program
+@app.command()
+def main(
+    # makes an optional argument can pass in right away
+    prompt: str = typer.Argument(None, help = "The plain English instruciton to convert to bash"),
+    # creates a save flag
+    save: bool = typer.Option(False, "--save", "-s", help = "Save the generated script to a .sh file")
+):
 
-    inital_prompt = input("Enter inital prompt: ")
-    script = generate_script(inital_prompt)
-    script_highlighted = Syntax(script, "bash", theme = "monokai")
-    print("Generated Bash Script:\n")
-    console.print(script_highlighted)
-    run = input("\nRun this script [y/n]: ").strip().lower() # allows for caps/whitespace
+    if not prompt:
+        prompt = get_input("Enter your prompt")
+    
+    script = generate_script(prompt)
 
-    # i like to have it so response could be y/yes/yurp/etc..
+    script_highlighted = Syntax(script, "bash", theme = "monokai", background_color = "default")
+    script_panel = Panel(
+        script_highlighted,
+        title = "[bold green]Generated Bash Script[/bold green]",
+        border_style = "white",
+        expand = False  # box wrapped tight to code width
+    )
+    console.print()
+    console.print(script_panel)
+    run = get_decision("Run this script?")
+    # should now be a selection can't choose any option but yes or no
     while True:
         if not run:
-            run = input("\nRun this script [y/n]: ").strip().lower()
-            continue
+            edit = get_decision("Edit this prompt?")
 
-        # TODO: make a [edit/save/exit instead of 3 y/n]
-        if run[0] == 'n':
-            edit = input("Edit the prompt [y/n]: ").strip().lower()
-            if edit[0] == 'n':
-                save = input("Save executable to ~/.local/bin? [y/n]: ").strip().lower()
-                if save[0] == 'y':
-                    script_name = input("Enter script name (no file type): ")
-                    save_script(script_name)
+            if not edit:
+                save_prompt = get_decision("Save executable to ~/.local/bin?")
+                if save_prompt:
+                    script_name = get_input("Enter script name (no file type):")
+                    save_script(script_name, script)
+
                 sys.exit(1)
 
-            elif edit[0] == 'y':
-                additional_prompt = input("\nEnter prompt: ")
+            elif edit:
+                additional_prompt = get_input("Enter your prompt")
                 script = generate_script(additional_prompt)
-                print("\nGenerated Bash Script:\n")
-                
+                console.print()
                 # make output highlighted, cleaner to look at and read/distingiush from rest of cli
-                script_highlighted = Syntax(script, "bash", line_numbers = True)
-                console.print(script_highlighted)
-                run = "" #  this will give the 'not run' ... cheeky way around
+                script_highlighted = Syntax(script, "bash", theme = "monokai", background_color = "default")
+                script_panel = Panel(
+                    script_highlighted,
+                    title = "[bold green]Generated Bash Script[/bold green]",
+                    border_style = "white",
+                    expand = False  # box wrapped tight to code width
+                )
+                console.print(script_panel)
+                run = get_decision("Run this script?")
 
-        elif run[0] == 'y':
+        elif run:
         # can excute script now
               break
-
+        
         else:
-            run = input("unexpected input... enter [y/n]: ").strip().lower()
+            run = get_decision("unexpected input... enter [y/n]: ")
 
     try:    
         # changed to Popen over run so could get live streaming using PIPE
@@ -118,82 +220,65 @@ if __name__ == "__main__":
             executable = '/bin/bash',  # forcing bash
             text = True,               # output as a string
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
+            bufsize = 1 # forces line buffering
         )
+        
+        has_output = False
 
+        # if no live output dont stream it
         for line in result.stdout:
-            print(f"{line.strip()}")
+            if not has_output:
+                console.print()
+                console.print(Rule("[bold cyan]Output stream:[/bold cyan]", style = "cyan"))
+                has_output = True
+            
+            console.print(f"[bold cyan]>[/bold cyan]{line.strip()}")
 
         result.wait()
 
+        if has_output:
+            console.print(Rule(style="cyan"))
+            console.print()
+
         # checking for bash errors
         if result.returncode != 0:
-            print("\nThe bash script failed to execute")
-            print(f"Error:\n {result.stderr.read()}")
+            error_msg = result.stderr.read().strip()
+            error_panel = Panel(
+                f"[bold red]{error_msg}[/bold red]",
+                title = "[bold red]Execution failed[/bold red]",
+                border_style = "red",
+                expand = False
+            )
+            console.print(error_panel)
         else:
-            print("\nScript executed successfully")
+            success_panel = Panel(
+                "[bold green]Script executed successfully[/bold green]",
+                border_style = "green",
+                expand = False
+            )
+            console.print(success_panel)
 
     except Exception as e:
-        print("The bash script failed to excecute")
-        print(f"Error output: {e.stderr}")
+        error_panel = Panel(
+            f"[bold red]{e}[/bold red]",
+            title="[bold red]System Error[/bold red]",
+            border_style="red",
+            expand=False
+        )
+        console.print(error_panel)
 
+    # if passed in save block 
+    if save:
+        script_name = get_input("Enter script name (no file type): ")
+        save_script(script_name, script)
 
-    save = input("Save executable to ~/.local/bin? [y/n]: ").strip().lower()
-
-    if save[0] == 'y':
-        # could parse reponse and only take part up until a '.' if it exits as precaution
-        script_name = input("Enter script name (no file type): ")
-        save_script(script_name)
     else:
-        sys.exit(1)
-    
-'''
-from ollama: what their .chat() json string looks like
-{
-  "model": "<string>",
-  "created_at": "2023-11-07T05:31:56Z",
-  "message": {
-    "role": "assistant",
-    "content": "<string>",
-    "thinking": "<string>",
-    "tool_calls": [
-      {
-        "function": {
-          "name": "<string>",
-          "description": "<string>",
-          "arguments": {}
-        }
-      }
-    ],
-    "images": [
-      "<string>"
-    ]
-  },
-  "done": true,
-  "done_reason": "<string>",
-  "total_duration": 123,
-  "load_duration": 123,
-  "prompt_eval_count": 123,
-  "prompt_eval_duration": 123,
-  "eval_count": 123,
-  "eval_duration": 123,
-  "logprobs": [
-    {
-      "token": "<string>",
-      "logprob": 123,
-      "bytes": [
-        123
-      ],
-      "top_logprobs": [
-        {
-          "token": "<string>",
-          "logprob": 123,
-          "bytes": [
-            123
-          ]
-        }
-      ]
-    }
-  ]
-}
-'''
+        # could parse reponse and only take part up until a '.' if it exits as precaution
+        save_prompt = get_decision("Save executable to ~/.local/bin?")
+        if save_prompt:
+            script_name = get_input("Enter script name (no file type): ")
+            save_script(script_name, script)
+
+if __name__ == "__main__":
+    app()
